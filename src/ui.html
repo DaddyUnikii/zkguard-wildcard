@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>zkGuard — Verifiable EVM/BSC Wallet Security Agent</title>
+  <style>
+    :root { --bg:#0b0f17; --card:#131a26; --border:#243044; --text:#e6edf7; --muted:#8b9bb4; --accent:#38bdf8; --ok:#22c55e; --bad:#ef4444; }
+    * { box-sizing:border-box; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    body { margin:0; background:var(--bg); color:var(--text); padding:28px 16px; }
+    .wrap { max-width:920px; margin:0 auto; }
+    h1 { margin:0 0 6px; font-size:26px; }
+    .sub { color:var(--muted); margin:0 0 20px; font-size:14px; }
+    .card { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:18px; margin-bottom:16px; }
+    .presets { display:flex; flex-wrap:wrap; gap:8px; margin-bottom:14px; }
+    button { background:#1d283a; color:var(--text); border:1px solid var(--border); padding:8px 12px; border-radius:8px; cursor:pointer; font-size:13px; }
+    button:hover { border-color:var(--accent); }
+    button.primary { background:var(--accent); color:#04121f; font-weight:600; border:none; padding:10px 16px; }
+    label { display:block; font-size:12px; color:var(--muted); margin:10px 0 4px; }
+    input, textarea { width:100%; background:#0b0f17; color:var(--text); border:1px solid var(--border); border-radius:8px; padding:9px 10px; font-family:ui-monospace, monospace; font-size:12px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+    .badge { display:inline-block; padding:4px 10px; border-radius:999px; font-weight:700; font-size:12px; }
+    .APPROVE { background:rgba(34,197,94,.16); color:var(--ok); }
+    .REJECT { background:rgba(239,68,68,.16); color:var(--bad); }
+    pre { background:#0b0f17; border:1px solid var(--border); border-radius:8px; padding:12px; overflow:auto; font-size:12px; max-height:320px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <h1>zkGuard — Verifiable EVM/BSC Wallet Security Agent</h1>
+    <p class="sub">Screens EVM/BSC transactions for drain traps &amp; risky approvals before signing, backed by a Groth16 ZK proof (zkVerify-compatible).</p>
+
+    <div class="card">
+      <div class="presets">
+        <button onclick="loadPreset('safe')">Preset: Safe Native Transfer</button>
+        <button onclick="loadPreset('unlimited')">Preset: Unlimited USDT Approval Trap</button>
+        <button onclick="loadPreset('nft')">Preset: NFT setApprovalForAll Drain</button>
+        <button onclick="loadPreset('overflow')">Preset: Value Cap Overflow</button>
+      </div>
+      <div class="grid">
+        <div>
+          <label>Target Contract / Recipient (to)</label>
+          <input id="to" />
+        </div>
+        <div>
+          <label>Expected Recipient</label>
+          <input id="expectedRecipient" />
+        </div>
+        <div>
+          <label>Native Value (wei)</label>
+          <input id="value" />
+        </div>
+        <div>
+          <label>Max Safe Value Cap (wei)</label>
+          <input id="maxSafeValue" />
+        </div>
+      </div>
+      <label>Calldata (hex)</label>
+      <textarea id="data" rows="3"></textarea>
+      <div style="margin-top:14px;">
+        <button class="primary" onclick="runAnalyze()">Screen Transaction &amp; Generate ZK Proof</button>
+      </div>
+    </div>
+
+    <div class="card" id="resultCard" style="display:none;">
+      <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+        <div>Verdict: <span id="verdictBadge" class="badge"></span></div>
+        <div style="font-size:13px; color:var(--muted);" id="metaLine"></div>
+      </div>
+      <pre id="out"></pre>
+    </div>
+  </div>
+
+  <script>
+    const PRESETS = {
+      safe: {
+        to: "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+        expectedRecipient: "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+        value: "100000000000000000",
+        maxSafeValue: "1000000000000000000",
+        data: "0x"
+      },
+      unlimited: {
+        to: "0x55d398326f99059fF775485246999027B3197955",
+        expectedRecipient: "0x55d398326f99059fF775485246999027B3197955",
+        value: "0",
+        maxSafeValue: "1000000000000000000",
+        data: "0x095ea7b3000000000000000000000000deadbeefdeadbeefdeadbeefdeadbeefdeadbeefffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+      },
+      nft: {
+        to: "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
+        expectedRecipient: "0xBC4CA0EdA7647A8aB7C2061c2E118A18a936f13D",
+        value: "0",
+        maxSafeValue: "1000000000000000000",
+        data: "0xa22cb465000000000000000000000000badc0de0badc0de0badc0de0badc0de0badc0de00000000000000000000000000000000000000000000000000000000000000001"
+      },
+      overflow: {
+        to: "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+        expectedRecipient: "0x10ED43C718714eb63d5aA57B78B54704E256024E",
+        value: "5000000000000000000",
+        maxSafeValue: "1000000000000000000",
+        data: "0x"
+      }
+    };
+    function loadPreset(k) {
+      const p = PRESETS[k];
+      for (const id of Object.keys(p)) document.getElementById(id).value = p[id];
+    }
+    loadPreset("unlimited");
+
+    async function runAnalyze() {
+      const payload = {
+        chainId: 56,
+        to: document.getElementById("to").value,
+        expectedRecipient: document.getElementById("expectedRecipient").value,
+        value: document.getElementById("value").value,
+        maxSafeValue: document.getElementById("maxSafeValue").value,
+        data: document.getElementById("data").value
+      };
+      const res = await fetch("/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload)
+      });
+      const json = await res.json();
+      document.getElementById("resultCard").style.display = "block";
+      const b = document.getElementById("verdictBadge");
+      b.textContent = json.decision;
+      b.className = "badge " + json.decision;
+      document.getElementById("metaLine").textContent =
+        `Risk Score: ${json.risk_score}/100 (${json.risk_level}) · Local ZK Verify: ${json.zk_proof?.verified_locally}`;
+      document.getElementById("out").textContent = JSON.stringify(json, null, 2);
+    }
+  </script>
+</body>
+</html>
